@@ -1,15 +1,14 @@
 /**
  * Serialize harness messages into an Anthropic messages request carrying the
- * Claude Code fingerprint the gateway admits. User/assistant text and tool
- * calls become Anthropic content blocks; harness tool-result messages become
- * user-role `tool_result` blocks. The fingerprint — billing `system[0]`,
+ * Claude Code fingerprint the gateway admits. User/assistant text, images, and
+ * tool calls become Anthropic content blocks; harness tool-result messages
+ * become user-role `tool_result` blocks. The fingerprint — billing `system[0]`,
  * `metadata`, `thinking:adaptive`, `context_management`, `output_config` — is
- * injected here, since the gateway rejects any request missing it. Image blocks
- * are rejected explicitly because this route is configured text-only.
+ * injected here, since the gateway rejects any request missing it.
  * @module dsh-llm-cc/serialize
  */
 
-import { contentHasImage, LlmError } from '@deepseek-ai/dsh-llm'
+import { LlmError } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
 import type {
   WireContentBlock,
@@ -39,6 +38,18 @@ export interface RequestDefaults {
   defaultEffort: WireEffort
   /** Per-request output cap when the request sets none; Anthropic requires a positive `max_tokens`. */
   maxTokens: number
+}
+
+/**
+ * Pre-resolved image data for one attachment ref. The adapter resolves images
+ * from the durable {@link AttachmentStore} before serialization so this module
+ * stays a pure synchronous function.
+ */
+export interface ResolvedImage {
+  /** MIME type verified from the stored bytes. */
+  mediaType: string
+  /** Base64-encoded image data. */
+  data: string
 }
 
 /**
@@ -72,19 +83,57 @@ function resolveEffort(
   }
 }
 
-/** Reject core image content before any text path can silently erase it. */
-function assertTextOnly(blocks: readonly ContentBlock[]): void {
-  if (contentHasImage(blocks)) {
-    throw new LlmError('The Claude Code adapter does not support image content.', 'UNSUPPORTED_CONTENT')
-  }
-}
-
 /** Join the text blocks of a message. */
-function flattenText(blocks: ContentBlock[]): string {
+function flattenText(blocks: readonly ContentBlock[]): string {
   return blocks
     .filter(block => block.type === 'text')
     .map(block => block.text)
     .join('')
+}
+
+/**
+ * Serialize user-role content blocks, resolving images from the pre-built map.
+ * Text blocks are flattened into a single block (Anthropic merges them anyway);
+ * images and tool-results are emitted as individual typed blocks.
+ * @param blocks - harness content blocks from one user message.
+ * @param images - pre-resolved image bytes keyed by attachment id; undefined when the request has no images.
+ */
+function serializeUserBlocks(
+  blocks: readonly ContentBlock[],
+  images: ReadonlyMap<string, ResolvedImage> | undefined,
+): WireContentBlock[] {
+  const content: WireContentBlock[] = []
+  const text = flattenText(blocks)
+  if (text.length > 0) content.push({ type: 'text', text })
+  for (const block of blocks) {
+    switch (block.type) {
+      case 'image': {
+        const resolved = images?.get(block.attachment.attachmentId)
+        if (resolved === undefined) {
+          throw new LlmError(
+            'Claude Code image input requires the durable attachment service',
+            'UNSUPPORTED_CONTENT',
+          )
+        }
+        content.push({
+          type: 'image',
+          source: { type: 'base64', media_type: resolved.mediaType, data: resolved.data },
+        })
+        break
+      }
+      case 'tool-result':
+        content.push({
+          type: 'tool_result',
+          tool_use_id: block.toolCallId,
+          content: flattenText(block.content) || '(no output)',
+          ...block.isError === true ? { is_error: true } : {},
+        })
+        break
+      default:
+        break
+    }
+  }
+  return content
 }
 
 /** Serialize one assistant message (text + tool calls) into Anthropic content blocks. */
@@ -110,36 +159,27 @@ function serializeAssistant(message: Message): WireMessage {
 }
 
 /**
- * Serialize the conversation into Anthropic messages. Harness tool-result
- * blocks ride in user-role messages; Anthropic wants them as `tool_result`
- * content blocks, also user-role — so a user turn contributes its text and its
+ * Serialize the conversation into Anthropic messages. Harness tool-result and
+ * image blocks ride in user-role messages; Anthropic wants them as typed content
+ * blocks, also user-role — so a user turn contributes its text, images, and
  * tool results as blocks of one user message.
  * @param messages - the harness conversation, in order.
+ * @param images - pre-resolved image bytes keyed by attachment id; undefined when no images exist.
  * @returns the wire messages; order preserved.
  */
-export function serializeMessages(messages: Message[]): WireMessage[] {
+export function serializeMessages(
+  messages: Message[],
+  images?: ReadonlyMap<string, ResolvedImage>,
+): WireMessage[] {
   const wire: WireMessage[] = []
   for (const message of messages) {
-    assertTextOnly(message.content)
     if (message.role === 'assistant') {
       wire.push(serializeAssistant(message))
       continue
     }
     // system and user roles both map to user-role content here; the harness
     // system prompt travels in the request `system` slot, not the message list.
-    const content: WireContentBlock[] = []
-    const text = flattenText(message.content)
-    if (text.length > 0) content.push({ type: 'text', text })
-    for (const block of message.content) {
-      if (block.type === 'tool-result') {
-        content.push({
-          type: 'tool_result',
-          tool_use_id: block.toolCallId,
-          content: flattenText(block.content) || '(no output)',
-          ...block.isError === true ? { is_error: true } : {},
-        })
-      }
-    }
+    const content = serializeUserBlocks(message.content, images)
     if (content.length === 0) content.push({ type: 'text', text: '' })
     wire.push({ role: message.role === 'system' ? 'user' : message.role, content })
   }
@@ -152,11 +192,13 @@ export function serializeMessages(messages: Message[]): WireMessage[] {
  * metadata are always present so the gateway admits the request.
  * @param options - the harness request (model, history, system, tools, sampling).
  * @param defaults - fingerprint facts from plugin config.
+ * @param images - pre-resolved image bytes; undefined when no images exist.
  * @returns the messages request body.
  */
 export function serializeRequest(
   options: GenerateOptions,
   defaults: RequestDefaults,
+  images?: ReadonlyMap<string, ResolvedImage>,
 ): WireRequest {
   const system: WireSystemBlock[] = [
     { type: 'text', text: billingHeaderText(defaults.claudeCodeVersion) },
@@ -174,7 +216,7 @@ export function serializeRequest(
   return {
     model: options.model,
     system,
-    messages: serializeMessages(options.messages),
+    messages: serializeMessages(options.messages, images),
     max_tokens: options.maxTokens ?? defaults.maxTokens,
     stream: true,
     thinking: { type: 'adaptive' },

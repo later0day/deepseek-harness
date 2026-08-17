@@ -11,7 +11,7 @@
  * @module dsh-llm-cc/adapter
  */
 
-import { CONTEXT_WINDOW_EXCEEDED_CODE, isContextWindowExceededError, isQuotaExceededError, LlmAdapter, LlmError, ProviderRequestId, QUOTA_EXCEEDED_CODE, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { CONTEXT_WINDOW_EXCEEDED_CODE, contentHasImage, isContextWindowExceededError, isQuotaExceededError, LlmAdapter, LlmError, ProviderRequestId, QUOTA_EXCEEDED_CODE, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type {
   GenerateOptions,
   LlmModelInfo,
@@ -20,10 +20,11 @@ import type {
   ResolvedRetryPolicy,
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
+import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import { serializeRequest } from './serialize.ts'
-import type { RequestDefaults } from './serialize.ts'
+import type { ResolvedImage, RequestDefaults } from './serialize.ts'
 import { parseSse } from './sse.ts'
 import { translate } from './translate.ts'
 import type { WireError } from './types.ts'
@@ -86,6 +87,12 @@ export interface CcAdapterOptions {
    * `MISSING_CREDENTIAL` when no key is available anywhere.
    */
   resolveApiKey: (connection: CcConnectionOptions) => Promise<string>
+  /**
+   * Resolve the durable attachment store for image content. Returns `undefined`
+   * when no store is available in the current composition; image blocks then
+   * fail with `UNSUPPORTED_CONTENT` at serialization time.
+   */
+  resolveAttachments?: () => AttachmentStore | undefined
 }
 
 /** Default maximum idle interval while an adapter stream read is outstanding. */
@@ -108,7 +115,7 @@ function modelInfo(provider: string, model: CcCatalogModel): LlmModelInfo {
     id: model.id,
     name: model.name ?? model.id,
     ...model.description === undefined ? {} : { description: model.description },
-    inputModalities: ['text'],
+    inputModalities: ['text', 'image'],
   }
 }
 
@@ -201,6 +208,11 @@ export class CcAdapter extends LlmAdapter {
     // never come from different configuration generations.
     const connection = this.config.options()
     const apiKey = await this.config.resolveApiKey(connection)
+
+    // Resolve image attachments before entering the transport boundary so
+    // serialize stays a pure synchronous function.
+    const images = await this.resolveImages(options)
+
     const consumer = new AbortController()
     const upstream = options.signal === undefined
       ? consumer.signal
@@ -211,6 +223,7 @@ export class CcAdapter extends LlmAdapter {
       watchdog.signal,
       connection,
       apiKey,
+      images,
       () => { watchdog.pulse() },
     )[Symbol.asyncIterator]()
     let exhausted = false
@@ -248,14 +261,56 @@ export class CcAdapter extends LlmAdapter {
     }
   }
 
+  /**
+   * Resolve all image attachments in the conversation to base64 data. Returns
+   * `undefined` when no images exist (the common case, avoiding map allocation).
+   */
+  private async resolveImages(
+    options: GenerateOptions,
+  ): Promise<ReadonlyMap<string, ResolvedImage> | undefined> {
+    if (!contentHasImage(options.messages.flatMap(m => m.content))) return undefined
+    const store = this.config.resolveAttachments?.()
+    if (store === undefined) {
+      throw new LlmError(
+        'Claude Code image input requires the durable attachment service',
+        'UNSUPPORTED_CONTENT',
+      )
+    }
+    const images = new Map<string, ResolvedImage>()
+    for (const message of options.messages) {
+      for (const block of message.content) {
+        if (block.type === 'image' && !images.has(block.attachment.attachmentId)) {
+          const stored = await store.readImage(block.attachment)
+          images.set(block.attachment.attachmentId, {
+            mediaType: stored.ref.mediaType,
+            data: Buffer.from(stored.data).toString('base64'),
+          })
+        }
+        if (block.type === 'tool-result') {
+          for (const nested of block.content) {
+            if (nested.type === 'image' && !images.has(nested.attachment.attachmentId)) {
+              const stored = await store.readImage(nested.attachment)
+              images.set(nested.attachment.attachmentId, {
+                mediaType: stored.ref.mediaType,
+                data: Buffer.from(stored.data).toString('base64'),
+              })
+            }
+          }
+        }
+      }
+    }
+    return images
+  }
+
   private async * request(
     options: GenerateOptions,
     signal: AbortSignal,
     connection: CcConnectionOptions,
     apiKey: string,
+    images: ReadonlyMap<string, ResolvedImage> | undefined,
     onComment: () => void,
   ): AsyncIterable<StreamChunk> {
-    const body = serializeRequest(options, connection.defaults)
+    const body = serializeRequest(options, connection.defaults, images)
     // Prepared outside the try so the TRANSPORT label below covers exactly the
     // transport boundary, never a serialization failure.
     const payload = JSON.stringify(body)

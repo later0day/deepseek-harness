@@ -181,7 +181,7 @@ describe('serializeMessages', () => {
     expect(wire).toEqual([{ role: 'user', content: [{ type: 'text', text: '' }] }])
   })
 
-  it('rejects image blocks instead of silently flattening them away', () => {
+  it('throws UNSUPPORTED_CONTENT when an image block has no resolved data', () => {
     expect(() => serializeMessages([createUserMessage({
       content: [{
         type: 'image',
@@ -192,6 +192,41 @@ describe('serializeMessages', () => {
       }],
       source: SOURCE,
     })])).toThrow(expect.objectContaining({ code: 'UNSUPPORTED_CONTENT' }))
+  })
+
+  it('serializes an image block using the pre-resolved images map', () => {
+    const id = AttachmentId(`sha256:${'b'.repeat(64)}`)
+    const images = new Map([[id, { mediaType: 'image/png', data: 'iVBOR...' }]])
+    const wire = serializeMessages([createUserMessage({
+      content: [{
+        type: 'image',
+        attachment: { attachmentId: id, mediaType: 'image/png', bytes: 128, width: 10, height: 10 },
+      }],
+      source: SOURCE,
+    })], images)
+    expect(wire).toEqual([{
+      role: 'user',
+      content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBOR...' } }],
+    }])
+  })
+
+  it('flattens text alongside an image in one user message', () => {
+    const id = AttachmentId(`sha256:${'c'.repeat(64)}`)
+    const images = new Map([[id, { mediaType: 'image/jpeg', data: '/9j/4A...' }]])
+    const wire = serializeMessages([createUserMessage({
+      content: [
+        { type: 'text', text: 'describe this: ' },
+        { type: 'image', attachment: { attachmentId: id, mediaType: 'image/jpeg', bytes: 200, width: 5, height: 5 } },
+      ],
+      source: SOURCE,
+    })], images)
+    expect(wire).toEqual([{
+      role: 'user',
+      content: [
+        { type: 'text', text: 'describe this: ' },
+        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: '/9j/4A...' } },
+      ],
+    }])
   })
 })
 

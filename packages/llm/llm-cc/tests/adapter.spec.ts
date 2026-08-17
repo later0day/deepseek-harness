@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
+import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import LlmRuntime, {
   createUserMessage,
   CONTEXT_WINDOW_EXCEEDED_CODE,
@@ -444,7 +445,7 @@ describe('plugin registration and config', () => {
     await ctx.plugin(LlmRuntime)
     await ctx.plugin(LlmCc, { baseURL: 'http://127.0.0.1:1' })
     await expect(ctx.llm.listModels('cc')).resolves.toEqual([
-      { provider: 'cc', id: 'claude-opus-4-8', name: 'Claude Opus 4.8', inputModalities: ['text'] },
+      { provider: 'cc', id: 'claude-opus-4-8', name: 'Claude Opus 4.8', inputModalities: ['text', 'image'] },
     ])
     await expect(ctx.llm.resolveModelInfo('cc', 'claude-opus-4-8')).resolves.toMatchObject({
       provider: 'cc',
@@ -495,8 +496,8 @@ describe('plugin registration and config', () => {
       ],
     })
     await expect(ctx.llm.listModels('cc')).resolves.toEqual([
-      { provider: 'cc', id: 'claude-opus-4-8', name: 'claude-opus-4-8', inputModalities: ['text'] },
-      { provider: 'cc', id: 'claude-sonnet-9', name: 'Sonnet 9', description: 'Faster', inputModalities: ['text'] },
+      { provider: 'cc', id: 'claude-opus-4-8', name: 'claude-opus-4-8', inputModalities: ['text', 'image'] },
+      { provider: 'cc', id: 'claude-sonnet-9', name: 'Sonnet 9', description: 'Faster', inputModalities: ['text', 'image'] },
     ])
   })
 
@@ -580,5 +581,180 @@ describe('plugin registration and config', () => {
     const adapter = adapterOf()
     expect(adapter).toBeInstanceOf(CcAdapter)
     await expect(adapter.listModels('cc')).resolves.toHaveLength(1)
+  })
+})
+
+describe('CcAdapter image resolution', () => {
+  it('throws UNSUPPORTED_CONTENT when image blocks are present but no store is available', async () => {
+    const server = await mockServer([{ kind: 'sse', events: textEvents }])
+    const id = AttachmentId(`sha256:${'a'.repeat(64)}`)
+    const adapter = new CcAdapter({
+      options: () => resolveAdapterOptions({ baseURL: server.url }, TEST_USER_ID),
+      resolveApiKey: () => Promise.resolve('k'),
+      resolveAttachments: () => undefined,
+    })
+    const messages = [createUserMessage({
+      content: [{
+        type: 'image',
+        attachment: { attachmentId: id, mediaType: 'image/png', bytes: 68, width: 1, height: 1 },
+      }],
+      source: { kind: 'plugin', plugin: 'test' },
+    })]
+    const gen = adapter.stream({ provider: 'cc', model: 'claude-opus-4-8', messages })
+    const iter = gen[Symbol.asyncIterator]()
+    await expect(iter.next()).rejects.toThrow(
+      expect.objectContaining({ code: 'UNSUPPORTED_CONTENT' }),
+    )
+  })
+
+  it('resolves image data and sends it on the wire', async () => {
+    const server = await mockServer([{ kind: 'sse', events: textEvents }])
+    const id = AttachmentId(`sha256:${'f'.repeat(64)}`)
+    const fakeStore = {
+      readImage: vi.fn().mockResolvedValue({
+        ref: { attachmentId: id, mediaType: 'image/png', bytes: 4, width: 2, height: 2 },
+        data: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+      }),
+    }
+    const adapter = new CcAdapter({
+      options: () => resolveAdapterOptions({ baseURL: server.url }, TEST_USER_ID),
+      resolveApiKey: () => Promise.resolve('k'),
+      resolveAttachments: () => fakeStore as never,
+    })
+    const messages = [createUserMessage({
+      content: [{
+        type: 'image',
+        attachment: { attachmentId: id, mediaType: 'image/png', bytes: 4, width: 2, height: 2 },
+      }],
+      source: { kind: 'plugin', plugin: 'test' },
+    })]
+    for await (const _ of adapter.stream({ provider: 'cc', model: 'claude-opus-4-8', messages })) {
+      // consume
+    }
+    expect(fakeStore.readImage).toHaveBeenCalledOnce()
+    const body = server.requests[0] as { messages: { content: unknown[] }[] }
+    const userMessage = body.messages[0]!
+    expect(userMessage.content).toContainEqual({
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: 'image/png',
+        data: Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64'),
+      },
+    })
+  })
+
+  it('resolves images nested inside tool-result blocks', async () => {
+    const server = await mockServer([{ kind: 'sse', events: textEvents }])
+    const imgId = AttachmentId(`sha256:${'d'.repeat(64)}`)
+    const fakeStore = {
+      readImage: vi.fn().mockResolvedValue({
+        ref: { attachmentId: imgId, mediaType: 'image/jpeg', bytes: 3, width: 1, height: 1 },
+        data: new Uint8Array([0xff, 0xd8, 0xff]),
+      }),
+    }
+    const adapter = new CcAdapter({
+      options: () => resolveAdapterOptions({ baseURL: server.url }, TEST_USER_ID),
+      resolveApiKey: () => Promise.resolve('k'),
+      resolveAttachments: () => fakeStore as never,
+    })
+    const messages = [createUserMessage({
+      content: [{
+        type: 'tool-result',
+        toolCallId: 'call-img' as never,
+        content: [{
+          type: 'image',
+          attachment: { attachmentId: imgId, mediaType: 'image/jpeg', bytes: 3, width: 1, height: 1 },
+        }],
+      }],
+      source: { kind: 'plugin', plugin: 'test' },
+    })]
+    for await (const _ of adapter.stream({ provider: 'cc', model: 'claude-opus-4-8', messages })) {
+      // consume
+    }
+    expect(fakeStore.readImage).toHaveBeenCalledOnce()
+  })
+
+  it('deduplicates repeated attachment ids across messages', async () => {
+    const server = await mockServer([{ kind: 'sse', events: textEvents }])
+    const id = AttachmentId(`sha256:${'e'.repeat(64)}`)
+    const fakeStore = {
+      readImage: vi.fn().mockResolvedValue({
+        ref: { attachmentId: id, mediaType: 'image/png', bytes: 4, width: 2, height: 2 },
+        data: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+      }),
+    }
+    const adapter = new CcAdapter({
+      options: () => resolveAdapterOptions({ baseURL: server.url }, TEST_USER_ID),
+      resolveApiKey: () => Promise.resolve('k'),
+      resolveAttachments: () => fakeStore as never,
+    })
+    const imgBlock = {
+      type: 'image' as const,
+      attachment: { attachmentId: id, mediaType: 'image/png' as const, bytes: 4, width: 2, height: 2 },
+    }
+    const messages = [
+      createUserMessage({ content: [imgBlock], source: { kind: 'plugin', plugin: 'test' } }),
+      createUserMessage({ content: [imgBlock], source: { kind: 'plugin', plugin: 'test' } }),
+    ]
+    for await (const _ of adapter.stream({ provider: 'cc', model: 'claude-opus-4-8', messages })) {
+      // consume
+    }
+    expect(fakeStore.readImage).toHaveBeenCalledOnce()
+  })
+
+  it('deduplicates a tool-result nested image already resolved from a top-level block', async () => {
+    const server = await mockServer([{ kind: 'sse', events: textEvents }])
+    const id = AttachmentId(`sha256:${'ab'.repeat(32)}`)
+    const fakeStore = {
+      readImage: vi.fn().mockResolvedValue({
+        ref: { attachmentId: id, mediaType: 'image/png', bytes: 4, width: 2, height: 2 },
+        data: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+      }),
+    }
+    const adapter = new CcAdapter({
+      options: () => resolveAdapterOptions({ baseURL: server.url }, TEST_USER_ID),
+      resolveApiKey: () => Promise.resolve('k'),
+      resolveAttachments: () => fakeStore as never,
+    })
+    const messages = [
+      createUserMessage({
+        content: [
+          { type: 'image', attachment: { attachmentId: id, mediaType: 'image/png', bytes: 4, width: 2, height: 2 } },
+          {
+            type: 'tool-result',
+            toolCallId: 'call-dup' as never,
+            content: [{ type: 'image', attachment: { attachmentId: id, mediaType: 'image/png', bytes: 4, width: 2, height: 2 } }],
+          },
+        ],
+        source: { kind: 'plugin', plugin: 'test' },
+      }),
+    ]
+    for await (const _ of adapter.stream({ provider: 'cc', model: 'claude-opus-4-8', messages })) {
+      // consume
+    }
+    // The same attachment appears in both a top-level image block and nested in a tool-result;
+    // readImage should be called only once due to dedup.
+    expect(fakeStore.readImage).toHaveBeenCalledOnce()
+  })
+
+  it('rejects images through the full plugin path when no attachment service is mounted', async () => {
+    const server = await mockServer([{ kind: 'sse', events: textEvents }])
+    vi.stubEnv('CC_API_KEY', 'test-key')
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(LlmCc, { baseURL: server.url })
+    const id = AttachmentId(`sha256:${'9'.repeat(64)}`)
+    const result = await assemble(ctx, {
+      model: 'claude-opus-4-8',
+      messages: [createUserMessage({
+        content: [{
+          type: 'image',
+          attachment: { attachmentId: id, mediaType: 'image/png', bytes: 10, width: 1, height: 1 },
+        }],
+        source: { kind: 'plugin', plugin: 'test' },
+      })],
+    })
+    expect(result.finish).toMatchObject({ kind: 'error', failure: { code: 'UNSUPPORTED_CONTENT' } })
   })
 })

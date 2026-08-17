@@ -270,7 +270,11 @@ export function apply(ctx: Context, config: Config): void {
     )
   }
 
-  const adapter = new CcAdapter({ options, resolveApiKey })
+  const adapter = new CcAdapter({
+    options,
+    resolveApiKey,
+    resolveAttachments: () => ctx.get('attachments'),
+  })
   ctx.llm.registerConfigurableProviders([
     { provider: PROVIDER, displayName: 'Claude Code', settingsNs: NS, settingsPath: [] },
   ])

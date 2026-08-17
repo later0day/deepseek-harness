@@ -112,7 +112,7 @@ describe('request-level dynamic configuration', () => {
     await expect(ctx.llm.listModels('cc')).resolves.toHaveLength(1)
     await ctx.settings.update(NS, { models: [{ id: 'settings-model', name: 'From Settings' }] })
     await expect(ctx.llm.listModels('cc')).resolves.toEqual([
-      { provider: 'cc', id: 'settings-model', name: 'From Settings', inputModalities: ['text'] },
+      { provider: 'cc', id: 'settings-model', name: 'From Settings', inputModalities: ['text', 'image'] },
     ])
   })
 
@@ -158,7 +158,7 @@ describe('request-level dynamic configuration', () => {
     await expect(ctx.llm.listModels('cc')).resolves.toHaveLength(1)
     await ctx.settings.update(NS, { models: [{ id: 'recovered' }] })
     await expect(ctx.llm.listModels('cc')).resolves.toEqual([
-      { provider: 'cc', id: 'recovered', name: 'recovered', inputModalities: ['text'] },
+      { provider: 'cc', id: 'recovered', name: 'recovered', inputModalities: ['text', 'image'] },
     ])
   })
 
