@@ -24,7 +24,7 @@ import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import { serializeRequest } from './serialize.ts'
-import type { ResolvedImage, RequestDefaults } from './serialize.ts'
+import type { ResolvedImage, RequestDefaults, WireEffort } from './serialize.ts'
 import { parseSse } from './sse.ts'
 import { translate } from './translate.ts'
 import type { WireError } from './types.ts'
@@ -102,12 +102,25 @@ export const DEFAULT_CONTEXT_WINDOW = 200_000
 /** Default per-request output-token cap. */
 export const DEFAULT_MAX_TOKENS = 64_000
 const STREAM_IDLE_TIMEOUT_CODE = 'LLM_STREAM_IDLE_TIMEOUT'
+const LOW_REASONING_EFFORT = ReasoningEffortId('low')
+const MEDIUM_REASONING_EFFORT = ReasoningEffortId('medium')
 const HIGH_REASONING_EFFORT = ReasoningEffortId('high')
+const XHIGH_REASONING_EFFORT = ReasoningEffortId('xhigh')
 const MAX_REASONING_EFFORT = ReasoningEffortId('max')
 const REASONING_EFFORTS = [
+  { id: LOW_REASONING_EFFORT, name: 'Low' },
+  { id: MEDIUM_REASONING_EFFORT, name: 'Medium' },
   { id: HIGH_REASONING_EFFORT, name: 'High' },
+  { id: XHIGH_REASONING_EFFORT, name: 'XHigh' },
   { id: MAX_REASONING_EFFORT, name: 'Max' },
 ] as const
+const REASONING_EFFORT_IDS = {
+  low: LOW_REASONING_EFFORT,
+  medium: MEDIUM_REASONING_EFFORT,
+  high: HIGH_REASONING_EFFORT,
+  xhigh: XHIGH_REASONING_EFFORT,
+  max: MAX_REASONING_EFFORT,
+} as const satisfies Record<WireEffort, ReturnType<typeof ReasoningEffortId>>
 
 function modelInfo(provider: string, model: CcCatalogModel): LlmModelInfo {
   return {
@@ -193,9 +206,7 @@ export class CcAdapter extends LlmAdapter {
       defaultMaxTokens: configured?.maxTokens ?? connection.maxTokens,
       reasoning: {
         efforts: REASONING_EFFORTS,
-        defaultEffort: connection.defaults.defaultEffort === 'max'
-          ? MAX_REASONING_EFFORT
-          : HIGH_REASONING_EFFORT,
+        defaultEffort: REASONING_EFFORT_IDS[connection.defaults.defaultEffort],
       },
     })
   }

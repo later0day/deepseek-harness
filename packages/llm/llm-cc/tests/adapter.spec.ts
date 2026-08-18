@@ -454,7 +454,10 @@ describe('plugin registration and config', () => {
       defaultMaxTokens: 64_000,
       reasoning: {
         efforts: [
+          { id: ReasoningEffortId('low'), name: 'Low' },
+          { id: ReasoningEffortId('medium'), name: 'Medium' },
           { id: ReasoningEffortId('high'), name: 'High' },
+          { id: ReasoningEffortId('xhigh'), name: 'XHigh' },
           { id: ReasoningEffortId('max'), name: 'Max' },
         ],
         defaultEffort: ReasoningEffortId('high'),
@@ -472,12 +475,29 @@ describe('plugin registration and config', () => {
     })
   })
 
-  it('reports the max default effort when configured', async () => {
-    const adapter = adapterOf({ reasoningEffort: 'max' })
-    await expect(adapter.resolveModel('cc', 'claude-opus-4-8')).resolves.toMatchObject({
-      reasoning: { defaultEffort: ReasoningEffortId('max') },
-    })
-  })
+  it.each(['low', 'medium', 'high', 'xhigh', 'max'] as const)(
+    'reports the %s default effort when configured',
+    async (reasoningEffort) => {
+      const adapter = adapterOf({ reasoningEffort })
+      await expect(adapter.resolveModel('cc', 'claude-opus-4-8')).resolves.toMatchObject({
+        reasoning: { defaultEffort: ReasoningEffortId(reasoningEffort) },
+      })
+    },
+  )
+
+  it.each(['low', 'medium', 'xhigh'] as const)(
+    'accepts an explicit %s reasoning effort through the full call-config validation',
+    async (effort) => {
+      const ctx = new Context()
+      await ctx.plugin(LlmRuntime)
+      await ctx.plugin(LlmCc, { baseURL: 'http://127.0.0.1:1' })
+      await expect(ctx.llm.resolveCallConfig({
+        provider: 'cc',
+        model: 'claude-opus-4-8',
+        reasoningEffort: ReasoningEffortId(effort),
+      })).resolves.toMatchObject({ reasoningEffort: ReasoningEffortId(effort) })
+    },
+  )
 
   it('prefers a model\'s own output cap over the profile default', async () => {
     const adapter = adapterOf({ maxTokens: 4096, models: [{ id: 'capped', maxTokens: 512 }, { id: 'uncapped' }] })
