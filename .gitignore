@@ -1,5 +1,10 @@
 CLAUDE.local.md
 .env
+# Credential material must never be committed. ~/.dsh/.credentials.yaml lives
+# outside this tree; these patterns block any credential file that lands inside.
+.credentials.yaml
+.credentials.yml
+*.credentials.yaml
 node_modules/
 lib/
 *.tsbuildinfo
