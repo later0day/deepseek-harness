@@ -1,13 +1,33 @@
 /**
  * credentials domain contract: the web face of the credential-reference seam
  * (`ctx.credentials`). Reads are structurally value-free — a credential view
- * carries configured/source/writable and has no slot for the value — and the
- * value crosses the wire in exactly one direction, inside `credentials.set`.
- * There is no enumeration method by design: clients learn which references
- * exist from settings schemas and values (`apiKeyEnv` fields).
+ * carries configured/source/writable (and, for a rotation pool, its member
+ * topology) and has no slot for the value — and the value crosses the wire in
+ * exactly one direction, inside `credentials.set`. There is no enumeration
+ * method by design: clients learn which references exist from settings schemas
+ * and values (`apiKeyEnv` fields), and a pool view names only the members of
+ * the one described reference.
  */
 
 import type { RpcRequest, RpcResponse } from './rpc.ts'
+
+/** Wire view of one rotation-pool member: its reference name and configured state, never a value. */
+export interface PoolMemberView {
+  /** The member's own reference name (for example `QWEN_API_KEY_1`). */
+  ref: string
+  /** Whether any layer currently supplies a non-empty value for this member. */
+  configured: boolean
+  /** Winning layer when configured (`env`, `file`, …); provider vocabulary. */
+  source?: string
+}
+
+/** Wire view of a rotation pool's topology: its policy and members, never a value. */
+export interface PoolView {
+  /** Provider-defined rotation policy label (`round_robin`, `manual`). */
+  policy: string
+  /** The pool's member references, in declaration order; never empty. */
+  members: PoolMemberView[]
+}
 
 /** Wire view of one credential reference's state. */
 export interface CredentialView {
@@ -17,6 +37,8 @@ export interface CredentialView {
   source?: string
   /** Whether `credentials.set`/`credentials.unset` can affect this reference. */
   writable: boolean
+  /** Rotation topology when the reference is a pool; absent for an ordinary reference. */
+  pool?: PoolView
 }
 
 /** Credentials-domain unary methods (the map keys credentials.* of RpcMethodMap). */

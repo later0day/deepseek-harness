@@ -17,8 +17,8 @@ import LlmRuntime, { LlmAdapter } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, LlmModelInfo, LlmProviderInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SettingsProvider, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
-import { CredentialProvider } from '@deepseek-ai/dsh-credentials'
-import type { CredentialInfo, CredentialRef, ResolvedCredential } from '@deepseek-ai/dsh-credentials'
+import { credentialRef, CredentialProvider } from '@deepseek-ai/dsh-credentials'
+import type { CredentialInfo, CredentialRef, PoolView, ResolvedCredential } from '@deepseek-ai/dsh-credentials'
 import type { HostFrame } from '../src/api/index.ts'
 import type { RpcRequest, RpcResponse } from '../src/api/rpc.ts'
 import { RpcId } from '../src/api/rpc.ts'
@@ -91,12 +91,17 @@ class MemorySettings extends SettingsProvider {
 class MemoryCredentials extends CredentialProvider {
   private readonly values = new Map<string, string>()
 
-  constructor(ctx: ConstructorParameters<typeof CredentialProvider>[0], options?: { shadowed?: string[] }) {
+  constructor(
+    ctx: ConstructorParameters<typeof CredentialProvider>[0],
+    options?: { shadowed?: string[]; pools?: Record<string, PoolView> },
+  ) {
     super(ctx)
     this.shadowed = new Set(options?.shadowed ?? [])
+    this.pools = options?.pools ?? {}
   }
 
   private readonly shadowed: Set<string>
+  private readonly pools: Record<string, PoolView>
 
   resolve(ref: CredentialRef): Promise<ResolvedCredential | undefined> {
     if (this.shadowed.has(ref)) return Promise.resolve({ value: 'from-env', source: 'env' })
@@ -106,6 +111,12 @@ class MemoryCredentials extends CredentialProvider {
 
   describe(ref: CredentialRef): Promise<CredentialInfo> {
     if (this.shadowed.has(ref)) return Promise.resolve({ configured: true, source: 'env', writable: false })
+    const pool = this.pools[ref]
+    if (pool !== undefined) {
+      const first = pool.members.find(member => member.configured)
+      if (first === undefined) return Promise.resolve({ configured: false, writable: false, pool })
+      return Promise.resolve({ configured: true, ...first.source === undefined ? {} : { source: first.source }, writable: false, pool })
+    }
     const configured = this.values.has(ref)
     return Promise.resolve({ configured, ...configured ? { source: 'file' } : {}, writable: true })
   }
@@ -170,7 +181,7 @@ async function harness(options?: {
     documentPath?: string
     preparedPath?: string
   }
-  credentials?: false | { shadowed?: string[] }
+  credentials?: false | { shadowed?: string[]; pools?: Record<string, PoolView> }
   /** Skip the directory registration to exercise a namespace the proxy does not expose. */
   configurableProviders?: false
 }): Promise<Context> {
@@ -614,6 +625,36 @@ describe('credentials domain', () => {
     expect(setError.details).toEqual({ ref: 'DEEPSEEK_API_KEY' })
     const unsetError = expectErr(await api.credentials.unset(request({ ref: 'DEEPSEEK_API_KEY' })))
     expect(unsetError.code).toBe('credential-rejected')
+  })
+
+  it('mirrors a rotation-pool topology through the wire, carrying no member value', async () => {
+    const ctx = await harness({
+      credentials: {
+        pools: {
+          QWEN_API_KEY: {
+            policy: 'round_robin',
+            members: [
+              { ref: credentialRef('QWEN_API_KEY_1'), configured: true, source: 'file' },
+              { ref: credentialRef('QWEN_API_KEY_2'), configured: false },
+            ],
+          },
+        },
+      },
+    })
+    const api = createApiProxy(ctx, DEFAULTS)
+    const value = expectOk(await api.credentials.describe(request({ refs: ['QWEN_API_KEY'] })))
+    expect(value.credentials['QWEN_API_KEY']).toEqual({
+      configured: true,
+      source: 'file',
+      writable: false,
+      pool: {
+        policy: 'round_robin',
+        members: [
+          { ref: 'QWEN_API_KEY_1', configured: true, source: 'file' },
+          { ref: 'QWEN_API_KEY_2', configured: false },
+        ],
+      },
+    })
   })
 })
 

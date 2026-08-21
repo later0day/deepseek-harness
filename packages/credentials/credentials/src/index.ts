@@ -35,6 +35,29 @@ export interface ResolvedCredential {
   source: string
 }
 
+/** Source and configured state of one pool member, safe for configuration UIs — never the value. */
+export interface PoolMemberView {
+  /** The member's own reference name (for example `QWEN_API_KEY_1`). */
+  ref: CredentialRef
+  /** Whether {@link CredentialProvider.resolve} of this member would currently return a value. */
+  configured: boolean
+  /** Source layer currently supplying this member's value; absent while unconfigured. */
+  source?: string
+}
+
+/**
+ * Rotation topology of one pool reference, safe for configuration UIs. Carries
+ * member reference *names* and each member's configured state and source, never
+ * a value, so it obeys the seam's value-free-reads rule; and it names only the
+ * members of the one described reference, so it adds no enumeration path.
+ */
+export interface PoolView {
+  /** Provider-defined rotation policy label (the key-pool provider uses `round_robin`, `manual`). */
+  policy: string
+  /** The pool's member references, in declaration order; never empty. */
+  members: PoolMemberView[]
+}
+
 /** Source and writability facts for one reference, safe for configuration UIs — never the value. */
 export interface CredentialInfo {
   /** Whether {@link CredentialProvider.resolve} would currently return a value. */
@@ -43,6 +66,12 @@ export interface CredentialInfo {
   source?: string
   /** Whether {@link CredentialProvider.set} would currently succeed for this reference. */
   writable: boolean
+  /**
+   * Rotation topology when the reference is a rotation pool; absent otherwise.
+   * The base {@link CredentialProvider.describe} contract leaves this undefined;
+   * only a provider that owns rotation populates it.
+   */
+  pool?: PoolView
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -74,7 +103,8 @@ export abstract class CredentialProvider extends Service {
 
   /**
    * Describe one reference for configuration surfaces without exposing the
-   * value.
+   * value. This contract leaves {@link CredentialInfo.pool} undefined; only a
+   * provider that owns rotation populates it.
    * @param ref - the reference to describe.
    * @returns configured state, supplying source, and writability.
    */

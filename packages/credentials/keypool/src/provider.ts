@@ -19,7 +19,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { LocalCredentialProvider } from '@deepseek-ai/dsh-credentials-local'
-import type { CredentialInfo, CredentialRef, ResolvedCredential } from '@deepseek-ai/dsh-credentials'
+import type { CredentialInfo, CredentialRef, PoolMemberView, PoolView, ResolvedCredential } from '@deepseek-ai/dsh-credentials'
 import { Config, resolvePools } from './config.ts'
 import type { PoolSpec } from './types.ts'
 import { pickMember } from './pick.ts'
@@ -89,18 +89,36 @@ export class KeypoolCredentialProvider extends LocalCredentialProvider {
    * Describe a pool without advancing its cursor: the pool is configured when
    * any member is, sourced from the first configured member, and never
    * writable — a pool reference maps to no single stored slot, so
-   * {@link set}/{@link unset} reject it and `writable` reports that.
+   * {@link set}/{@link unset} reject it and `writable` reports that. The
+   * returned {@link CredentialInfo.pool} block names the policy and every
+   * member with its own `configured`/`source`, so a configuration surface can
+   * show which members are missing while the pool still reports configured. It
+   * carries no value, and it names only this pool's own members, so it stays
+   * value-free and adds no enumeration path.
    * @param spec - the pool declaration.
-   * @returns the aggregate description.
+   * @returns the aggregate description with its rotation topology.
    */
   private async describePool(spec: PoolSpec): Promise<CredentialInfo> {
-    for (const member of spec.members) {
+    // One base describe per member, bounded by the declared member count.
+    const members = await Promise.all(spec.members.map(async (member): Promise<PoolMemberView> => {
       const info = await super.describe(member)
-      // Preserve the member's own source (env/file/.env) verbatim; only force
-      // writability false, since a pool reference maps to no single stored slot.
-      if (info.configured) return { ...info, writable: false }
+      return {
+        ref: member,
+        configured: info.configured,
+        ...info.source === undefined ? {} : { source: info.source },
+      }
+    }))
+    const pool: PoolView = { policy: spec.policy, members }
+    // The aggregate is the first configured member's source; a pool reference
+    // maps to no single stored slot, so it is never writable.
+    const firstConfigured = members.find(member => member.configured)
+    if (firstConfigured === undefined) return { configured: false, writable: false, pool }
+    return {
+      configured: true,
+      ...firstConfigured.source === undefined ? {} : { source: firstConfigured.source },
+      writable: false,
+      pool,
     }
-    return { configured: false, writable: false }
   }
 
   override set(ref: CredentialRef, value: string): Promise<void> {

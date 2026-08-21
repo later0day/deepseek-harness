@@ -1,0 +1,44 @@
+- dialog "设置":
+  - navigation:
+    - text: 设置
+    - button "通用设置":
+      - img
+      - text: 通用设置
+    - button "模型":
+      - img
+      - text: 模型
+    - button "插件":
+      - img
+      - text: 插件
+    - button "Agent 预设":
+      - img
+      - text: Agent 预设
+  - button "打开配置文件"
+  - button "关闭":
+    - img
+    - text: 关闭
+  - heading "模型" [level=2]
+  - paragraph: 填入各提供方的 API 密钥即可使用其模型。
+  - list:
+    - listitem:
+      - text: Claude Code
+      - img "API 密钥缺失"
+      - button "编辑 Claude Code (cc)": 编辑
+    - listitem:
+      - text: Qwen 自定义
+      - img "API 密钥已配置"
+      - button "编辑 Qwen (qwen)": 编辑
+      - button "删除 Qwen (qwen)": 删除
+      - text: Qwen qwen API 密钥
+      - textbox "API 密钥" [disabled]:
+        - /placeholder: 由启动环境提供（只读）
+      - text: 密钥池 轮换 7/8 已配置 QWEN_API_KEY_1 QWEN_API_KEY_2 QWEN_API_KEY_3 QWEN_API_KEY_4 QWEN_API_KEY_5 QWEN_API_KEY_6 QWEN_API_KEY_7 QWEN_API_KEY_8
+      - group: 自定义设置
+      - button "取消"
+      - button "保存"
+  - button "添加提供方":
+    - img
+    - text: 添加提供方
+  - button "添加自定义提供方":
+    - img
+    - text: 添加自定义提供方

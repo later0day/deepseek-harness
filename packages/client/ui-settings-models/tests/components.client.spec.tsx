@@ -423,6 +423,71 @@ describe('ModelsSection', () => {
     expect(onClose).toHaveBeenCalledWith(true)
   })
 
+  it('renders a rotation pool as a policy badge, configured count, and per-member chips', async () => {
+    const { face } = scriptedFace()
+    face.credentials.describe.mockImplementation((payload: { refs: string[] }) => Promise.resolve(ok({
+      credentials: Object.fromEntries(payload.refs.map(ref => [ref, {
+        configured: true,
+        source: 'file',
+        writable: false,
+        pool: {
+          policy: 'round_robin',
+          members: [
+            { ref: 'QWEN_API_KEY_1', configured: true, source: 'file' },
+            { ref: 'QWEN_API_KEY_2', configured: false },
+            { ref: 'QWEN_API_KEY_3', configured: true, source: 'env' },
+          ],
+        },
+      }])),
+    })))
+    const { ProviderEditor } = await import('../src/client/ProviderEditor.tsx')
+
+    render(<ProviderEditor
+      provider="deepseek-official"
+      displayName="DeepSeek"
+      namespace={wireNamespaces()[0]!}
+      schema={settingsSchema}
+      settingsPath={[]}
+      api={face as never}
+      t={t}
+      readOnly={false}
+      onClose={() => {}}
+    />)
+
+    expect(await screen.findByText(en.poolLabel)).toBeTruthy()
+    expect(screen.getByText(en.poolPolicyRoundRobin)).toBeTruthy()
+    // "2/3 configured": two of the three members resolve.
+    expect(screen.getByText(`2/3 ${en.poolMemberConfigured}`)).toBeTruthy()
+    for (const ref of ['QWEN_API_KEY_1', 'QWEN_API_KEY_2', 'QWEN_API_KEY_3']) {
+      expect(screen.getByText(ref)).toBeTruthy()
+    }
+    const dots = document.querySelectorAll('[class*="poolMember"] [class*="credentialDot"]')
+    expect(dots).toHaveLength(3)
+    expect(dots[0]!.className).toContain('credentialDotConfigured')
+    expect(dots[1]!.className).toContain('credentialDotMissing')
+    expect(dots[2]!.className).toContain('credentialDotConfigured')
+    // The read-only pool never carries a member value onto the page.
+    expect(document.body.textContent).not.toContain('sk-')
+  })
+
+  it('renders no pool block for an ordinary credential reference', async () => {
+    const { face } = scriptedFace()
+    const { ProviderEditor } = await import('../src/client/ProviderEditor.tsx')
+    render(<ProviderEditor
+      provider="deepseek-official"
+      displayName="DeepSeek"
+      namespace={wireNamespaces()[0]!}
+      schema={settingsSchema}
+      settingsPath={[]}
+      api={face as never}
+      t={t}
+      readOnly={false}
+      onClose={() => {}}
+    />)
+    await screen.findByLabelText(en.keyInput)
+    expect(screen.queryByText(en.poolLabel)).toBeNull()
+  })
+
   it('applies customized deepseek fields as path ops', async () => {
     const { mutate } = await mountDeepSeekCard({
       mutate: vi.fn(() => Promise.resolve(ok(wireNamespaces()[0]))),

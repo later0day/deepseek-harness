@@ -3242,6 +3242,16 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
             configured: info.configured,
             ...info.source === undefined ? {} : { source: info.source },
             writable: info.writable,
+            ...info.pool === undefined ? {} : {
+              pool: {
+                policy: info.pool.policy,
+                members: info.pool.members.map(member => ({
+                  ref: member.ref,
+                  configured: member.configured,
+                  ...member.source === undefined ? {} : { source: member.source },
+                })),
+              },
+            },
           }
           return [ref, view] as const
         }))

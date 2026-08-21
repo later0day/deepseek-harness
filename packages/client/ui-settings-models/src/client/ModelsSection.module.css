@@ -259,6 +259,53 @@
   gap: 6px;
 }
 
+.pool {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.poolHead {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.poolPolicy {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.poolCount {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.poolMembers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.poolMember {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: 12px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-secondary);
+}
+
 .fieldLabel {
   display: inline-flex;
   align-items: center;

@@ -132,6 +132,19 @@ function layoutOf(ns: string): EditorLayout {
   return 'unknown'
 }
 
+/**
+ * The policy label copy key for a pool, or `undefined` for a policy this UI
+ * has no localized name for — the raw provider label is shown instead, so a
+ * provider adding a policy never renders a blank badge.
+ * @param policy - the provider's rotation policy label.
+ * @returns the copy key, or `undefined` to fall back to the raw label.
+ */
+function poolPolicyKey(policy: string): keyof typeof en | undefined {
+  if (policy === 'round_robin') return 'poolPolicyRoundRobin'
+  if (policy === 'manual') return 'poolPolicyManual'
+  return undefined
+}
+
 /** The credential reference this profile resolves keys through. */
 function refFor(
   schema: SettingsSchemaOperations,
@@ -144,6 +157,42 @@ function refFor(
     ? (profile as { apiKeyEnv?: unknown }).apiKeyEnv
     : undefined
   return typeof named === 'string' && named.length > 0 ? named : deriveKeyRef(provider)
+}
+
+/**
+ * The rotation-pool view for a credential that describes as a pool, or `null`
+ * for an ordinary reference. Renders a policy badge, an `N/M configured` count,
+ * and one chip per member reflecting its stored state. Generic over any pool:
+ * keyed only on the `pool` block, it names no member reference and hardcodes no
+ * member count, so a second declared pool renders the same way.
+ * @param keyState - the credential view for this profile's reference.
+ * @param t - section copy.
+ * @returns the pool view, or `null`.
+ */
+function poolView(keyState: CredentialView | undefined, t: (key: keyof typeof en) => string): ReactNode {
+  const pool = keyState?.pool
+  if (pool === undefined) return null
+  const configured = pool.members.filter(member => member.configured).length
+  const policyKey = poolPolicyKey(pool.policy)
+  return (
+    <div className={styles['pool']}>
+      <div className={styles['poolHead']}>
+        <span className={styles['fieldLabel']}>{t('poolLabel')}</span>
+        <span className={styles['poolPolicy']}>{policyKey === undefined ? pool.policy : t(policyKey)}</span>
+        <span className={styles['poolCount']}>{`${String(configured)}/${String(pool.members.length)} ${t('poolMemberConfigured')}`}</span>
+      </div>
+      <div className={styles['poolMembers']}>
+        {pool.members.map(member => (
+          <span key={member.ref} className={styles['poolMember']}>
+            <span
+              className={`${styles['credentialDot']} ${styles[member.configured ? 'credentialDotConfigured' : 'credentialDotMissing']}`}
+            />
+            {member.ref}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 /**
@@ -387,6 +436,7 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
           />
           {shownKeyFailure === undefined ? null : <p className={styles['error']}>{t(shownKeyFailure)}</p>}
         </div>
+        {poolView(keyState, t)}
         {props.credentialOnly === true ? null : <details className={styles['customized']}>
           <summary className={styles['customizedSummary']}>{t('customized')}</summary>
           <div className={styles['customizedBody']}>

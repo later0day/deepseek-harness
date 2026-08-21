@@ -13,11 +13,25 @@ import type { CredentialView } from './credentials.ts'
 /** POSIX-portable environment-variable name (the seam's `credentialRef` pattern). */
 export const credentialRefNameSchema = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)
 
+/** PoolMemberView entry of a pool view: a member reference name and its configured state, never a value. */
+export const poolMemberViewSchema = z.object({
+  ref: credentialRefNameSchema,
+  configured: z.boolean(),
+  source: z.string().optional(),
+})
+
+/** PoolView block of a CredentialView: rotation policy and members, never a value. */
+export const poolViewSchema = z.object({
+  policy: z.string(),
+  members: z.array(poolMemberViewSchema),
+})
+
 /** CredentialView entry of credentials.describe. */
 export const credentialViewSchema = z.object({
   configured: z.boolean(),
   source: z.string().optional(),
   writable: z.boolean(),
+  pool: poolViewSchema.optional(),
 }) satisfies z.ZodType<Wire<CredentialView>>
 
 /** credentials.describe request payload. */
