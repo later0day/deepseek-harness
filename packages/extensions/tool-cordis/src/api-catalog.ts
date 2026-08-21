@@ -588,7 +588,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'abstract describe(ref: CredentialRef): Promise<CredentialInfo>',
-        description: 'Describe one reference for configuration surfaces without exposing the value.',
+        description: 'Describe one reference for configuration surfaces without exposing the value. This contract leaves CredentialInfo.pool undefined; only a provider that owns rotation populates it.',
         parameters: [{ name: 'ref', description: 'the reference to describe.' }],
         returns: 'configured state, supplying source, and writability.',
       },
@@ -3030,7 +3030,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'CredentialInfo',
-    declaration: 'export interface CredentialInfo {\n    configured: boolean;\n    source?: string;\n    writable: boolean;\n}',
+    declaration: 'export interface CredentialInfo {\n    configured: boolean;\n    source?: string;\n    writable: boolean;\n    pool?: PoolView;\n}',
   },
   {
     name: 'CredentialRef',

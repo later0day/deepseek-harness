@@ -572,8 +572,8 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
       const target = join(REPO_ROOT, 'packages/credentials/keypool')
       const link = join(harnessHome, 'profiles', 'node_modules', '@deepseek-ai', 'dsh-credentials-keypool')
       await mkdir(join(harnessHome, 'profiles', 'node_modules', '@deepseek-ai'), { recursive: true })
-      await symlink(target, link, 'junction').catch((error: unknown) => {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      await symlink(target, link, 'junction').catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'EEXIST') throw error
       })
     }
     const profileDir = join(harnessHome, 'profiles', 'scaffold')

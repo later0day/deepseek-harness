@@ -42,6 +42,12 @@ interface CredentialInfo {
   source?: string
   /** Whether {@link CredentialProvider.set} would currently succeed for this reference. */
   writable: boolean
+  /**
+   * Rotation topology when the reference is a rotation pool; absent otherwise.
+   * The base {@link CredentialProvider.describe} contract leaves this undefined;
+   * only a provider that owns rotation populates it.
+   */
+  pool?: PoolView
 }
 ```
 
@@ -76,7 +82,8 @@ abstract resolve(ref: CredentialRef): Promise<ResolvedCredential | undefined>
 
 /**
  * Describe one reference for configuration surfaces without exposing the
- * value.
+ * value. This contract leaves {@link CredentialInfo.pool} undefined; only a
+ * provider that owns rotation populates it.
  * @param ref - the reference to describe.
  * @returns configured state, supplying source, and writability.
  */
@@ -101,7 +108,7 @@ abstract set(ref: CredentialRef, value: string): Promise<void>
 abstract unset(ref: CredentialRef): Promise<void>
 ```
 
-Source: [`packages/credentials/credentials/src/index.ts:60`](../../packages/credentials/credentials/src/index.ts)
+Source: [`packages/credentials/credentials/src/index.ts:89`](../../packages/credentials/credentials/src/index.ts)
 
 <a id="credentials-events"></a>
 
