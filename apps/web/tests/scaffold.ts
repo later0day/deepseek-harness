@@ -23,7 +23,7 @@
 // (the plugin-row path discards the ReplayHandle; the direct install keeps
 // assertConsumed for the teardown fixture-consumption check).
 import { existsSync, readFileSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -46,9 +46,6 @@ import {
 } from '@deepseek-ai/dsh-app-boot'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
-import { credentialRef } from '@deepseek-ai/dsh-credentials'
-// Empty type import carries the ctx.credentials Context merge for the keypool seeding lane.
-import type {} from '@deepseek-ai/dsh-credentials'
 import { LlmAdapter } from '@deepseek-ai/dsh-llm'
 import type {
   LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, RetryPolicyConfig, StreamChunk,
@@ -303,35 +300,6 @@ export interface LaunchOptions {
   remoteAuthority?: string
   /** Reuse an existing harness home so a second Host can verify user settings across origins. */
   harnessHome?: string
-  /**
-   * Swap the shipped `dsh-credentials-local` row for the opt-in
-   * `dsh-credentials-keypool` provider, declaring rotation pools so a route
-   * whose `apiKeyEnv` names a pool reference describes as a pool (policy plus
-   * per-member configured state) and the models section renders the pool
-   * badge and member chips. This is the only lane that mounts the keypool
-   * provider — it stays out of shipped defaults. The scaffold links the
-   * package into the profile module fallback (nothing in the app's dependency
-   * closure reaches it, so {@link healProfilesModuleFallback} would not) and
-   * seeds the members and the pi-ai route below post-boot.
-   */
-  keypool?: {
-    /** Pool declarations keyed by pool reference, exactly the keypool row's `pools` config. */
-    pools: Record<string, { policy?: 'round_robin' | 'manual'; members: string[]; active?: string }>
-    /**
-     * Member references seeded into the managed credentials document with the
-     * given SYNTHETIC placeholder values before browser boot. Never a real
-     * key: the snapshot asserts no member value reaches the wire.
-     */
-    members?: Record<string, string>
-    /**
-     * pi-ai provider profiles seeded under the `llm-pi-ai` settings namespace
-     * (keyed by route), so a route whose `apiKeyEnv` is a pool reference has a
-     * card the pool renders under. Structural because importing the pi-ai
-     * config type would pull its whole TS project into this host graph; the
-     * value is the profile the namespace validator accepts.
-     */
-    piAiProviders?: Record<string, Record<string, unknown>>
-  }
 }
 
 /** Dispose the booted tree and remove both owned temp roots, reporting every independent cleanup failure. */
@@ -509,21 +477,7 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
       ? []
       : [{ id: 'connection', config: { trustedHosts: [options.remoteAuthority] } }],
     { id: 'settings', config: { dshHome: harnessHome } },
-    // The shipped credentials row is the file-backed local provider. The
-    // keypool lane swaps it for the rotating provider, which is a superset of
-    // the file provider's config (same document) plus a `pools` map. A patch
-    // `name` is an assertion, not an override, so the swap is a disable+insert
-    // pair like the directory-picker one below.
-    ...options.keypool === undefined
-      ? [{ id: 'credentials', config: { dshHome: harnessHome } }]
-      : [
-        { id: 'credentials', disabled: true },
-        { insert: [{
-          id: 'credentials-keypool',
-          name: '@deepseek-ai/dsh-credentials-keypool',
-          config: { dshHome: harnessHome, pools: options.keypool.pools },
-        }] },
-      ],
+    { id: 'credentials', config: { dshHome: harnessHome } },
     // The shipped directory-picker row is the -auto chooser, which resolves
     // the interaction from the RUNNING host (display, SSH launch, bind). The
     // lane's goldens are interaction-specific (workspace-management drives
@@ -574,18 +528,6 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
     // harness home, with bare plugin names resolving through the flat module
     // fallback the launcher heals under <home>/profiles.
     healProfilesModuleFallback(INSTALL_ANCHOR, harnessHome)
-    // The keypool provider is opt-in: nothing in the app's dependency closure
-    // reaches it, so the fallback heal above never links it. This lane mounts
-    // it, so link it by hand into the same flat module directory (a junction,
-    // matching the heal's own link type) before the Loader resolves the row.
-    if (options.keypool !== undefined) {
-      const target = join(REPO_ROOT, 'packages/credentials/keypool')
-      const link = join(harnessHome, 'profiles', 'node_modules', '@deepseek-ai', 'dsh-credentials-keypool')
-      await mkdir(join(harnessHome, 'profiles', 'node_modules', '@deepseek-ai'), { recursive: true })
-      await symlink(target, link, 'junction').catch((error: unknown) => {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-      })
-    }
     const profileDir = join(harnessHome, 'profiles', 'scaffold')
     await mkdir(profileDir, { recursive: true })
     const rootConfig = join(profileDir, 'cordis.yml')
@@ -620,23 +562,6 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
       await ctx.settings.mutate(settingsNamespace(WELCOME_NOTICE_SETTINGS_NAMESPACE), [{
         op: 'set', path: [WELCOME_NOTICE_ACK_FIELD], value: WELCOME_NOTICE_VERSION,
       }])
-    }
-    if (options.keypool !== undefined) {
-      // Seed the pool members with synthetic placeholders through the mounted
-      // keypool provider — a member write passes straight through to the file
-      // backend, so the managed document now stores each seeded member and the
-      // pool describes them as configured. Never a real key: the snapshot
-      // asserts no member value reaches the wire.
-      for (const [ref, value] of Object.entries(options.keypool.members ?? {})) {
-        await ctx.credentials.set(credentialRef(ref), value)
-      }
-      // Seed the pi-ai routes whose apiKeyEnv names a pool reference, so the
-      // models section has a card under which the pool block renders.
-      if (options.keypool.piAiProviders !== undefined) {
-        await ctx.settings.mutate(settingsNamespace('llm-pi-ai'), [{
-          op: 'set', path: ['providers'], value: options.keypool.piAiProviders,
-        }])
-      }
     }
     const boundPort = ctx.get('webServer')?.port
     if (boundPort === undefined) {

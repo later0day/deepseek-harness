@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/simplification/2026-08-26-externalize-keypool-plugin.md
+2026-08-26-externalize-keypool-plugin.md: f5d0071aac4cf8751ac4e57b23ea41587d715fee
+2026-08-26-externalize-keypool-plugin.zh.md: 407a8b279d6c052789efe851157b770467b14253
