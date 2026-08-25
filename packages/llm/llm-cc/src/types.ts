@@ -39,7 +39,9 @@ export interface WireRequest {
 
 /** One server-side context-management edit. */
 export interface WireContextEdit {
+  /** Edit strategy the gateway applies to prior turns (for example `clear_thinking_20251015`). */
   type: string
+  /** Which content the edit retains (for example `all`). */
   keep: string
 }
 

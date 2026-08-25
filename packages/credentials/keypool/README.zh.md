@@ -2,15 +2,15 @@
 
 [English](README.md) | 中文
 
-轮换的[凭据](../credentials/README.md)提供方：一个池引用，多个成员键，按策略挑选。
+轮换的[凭据](../credentials/README.zh.md)提供方：一个池引用，多个成员键，按策略挑选。
 
-它子类化 [`credentials-local`](../credentials-local/README.md)。*池引用*是适配器所请求的名字（例如 `QWEN_API_KEY`）；其*成员*是同一 `$DSH_HOME/.credentials.yaml` 文档中存储的具体键（例如 `QWEN_API_KEY_1` … `QWEN_API_KEY_8`）。每次解析一个池引用时，本提供方按池的策略挑选一个成员，并通过继承的文件后端解析*那个*成员。凡不是已声明池引用的一切——解析、描述、写入、热重载、销毁——都是文件提供方原样的行为。
+它子类化 [`credentials-local`](../credentials-local/README.zh.md)。*池引用*是适配器所请求的名字（例如 `QWEN_API_KEY`）；其*成员*是同一 `$DSH_HOME/.credentials.yaml` 文档中存储的具体键（例如 `QWEN_API_KEY_1` … `QWEN_API_KEY_8`）。每次解析一个池引用时，本提供方按池的策略挑选一个成员，并通过继承的文件后端解析*那个*成员。凡不是已声明池引用的一切——解析、描述、写入、热重载、销毁——都是文件提供方原样的行为。
 
 轮换位于凭据 seam 而非某个 LLM 适配器，因为该 seam 按操作解析：在每次请求时重新读取键的适配器（直连 DeepSeek 与 pi-ai 适配器都如此）会自动看到下一个成员，无需改动适配器，也无需访问适配器私有状态。
 
 ## 配置
 
-文件后端字段（`path`、`dshHome`、`watch`、`debounceMs`）与 [`credentials-local`](../credentials-local/README.md) 中完全一致地贯穿到底层文档，另加：
+文件后端字段（`path`、`dshHome`、`watch`、`debounceMs`）与 [`credentials-local`](../credentials-local/README.zh.md) 中完全一致地贯穿到底层文档，另加：
 
 | 字段 | 默认值 | 含义 |
 |---|---|---|
@@ -45,7 +45,7 @@
 
 ## 文档
 
-成员是 [`credentials-local`](../credentials-local/README.md#the-document) 所拥有的同一 YAML 文档中的普通条目——磁盘上没有新东西：
+成员是 [`credentials-local`](../credentials-local/README.zh.md#the-document) 所拥有的同一 YAML 文档中的普通条目——磁盘上没有新东西：
 
 ```yaml
 QWEN_API_KEY_1: sk-…
@@ -78,7 +78,7 @@ QWEN_API_KEY_3: sk-…
 
 ## 模型体验
 
-间接地，通过消费的 LLM 适配器，与 [`credentials-local`](../credentials-local/README.md#model-experience) 完全一致：存储的值授权提供方请求，且适配器拥有每个模型可见面。轮换在解析出的值之上不可见。
+间接地，通过消费的 LLM 适配器，与 [`credentials-local`](../credentials-local/README.zh.md#model-experience) 完全一致：存储的值授权提供方请求，且适配器拥有每个模型可见面。轮换在解析出的值之上不可见。
 
 #### KV 缓存影响
 
@@ -88,4 +88,4 @@ QWEN_API_KEY_3: sk-…
 
 - **无错误驱动的 failover**——见[策略](#policies)；坏成员在被移除前仍会按次被选中。重试层的 failover 被推迟。
 - **游标仅在内存中**——重启不会恢复 round-robin 位置；只有相对推进有意义。
-- 继承 [`credentials-local`](../credentials-local/README.md#known-limitations-and-deferred-work) 的每一项限制，包括同 UID 读取访问与启动时冻结的环境层。
+- 继承 [`credentials-local`](../credentials-local/README.zh.md#known-limitations-and-deferred-work) 的每一项限制，包括同 UID 读取访问与启动时冻结的环境层。

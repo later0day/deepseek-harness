@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/feature/2026-08-17-llm-cc-anthropic-adapter.md
+2026-08-17-llm-cc-anthropic-adapter.md: 8b4b99ea779cb3e1e01f871b93ba5fe97d4283be
+2026-08-17-llm-cc-anthropic-adapter.zh.md: d2e09c30d03a61717ebc448433eb6fec5269a431
