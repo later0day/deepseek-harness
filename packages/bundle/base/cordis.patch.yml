@@ -449,15 +449,3 @@
     # choice.
     - id: llm-deepseek
       name: '@deepseek-ai/dsh-llm-deepseek'
-
-    # The Claude Code adapter for the `cc` provider route. Unlike the pi-ai
-    # generic anthropic-messages twin, every request carries the Claude Code
-    # fingerprint the gateway admits (Bearer auth, the claude-cli user-agent,
-    # the anthropic-beta list, and a billing `system[0]`), so a gateway that
-    # rejects generic anthropic clients still serves this route. No key or
-    # endpoint is inlined: both resolve per request from the `llm-cc:` settings
-    # section over this entry, the key from the credential store above. Because
-    # it owns `cc`, a `llm-pi-ai:` settings section must not also define a `cc`
-    # provider, or both adapters claim the route and registration fails loud.
-    - id: llm-cc
-      name: '@deepseek-ai/dsh-llm-cc'
