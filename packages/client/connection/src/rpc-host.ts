@@ -1,5 +1,6 @@
 /** Host registry and HTTP adapter for generic Connection RPC channels. */
 
+import { networkInterfaces } from 'node:os'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { PeerScope } from '@deepseek-ai/dsh-typert-protocol'
@@ -59,6 +60,19 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
+/**
+ * DSH fork: a wildcard bind (`0.0.0.0`, `::`) serves every interface, so this
+ * machine's own non-internal IPv4 interface addresses are its authorities too.
+ * Read per request so a changed DHCP lease needs no restart.
+ * @param bindHost - the listener's configured bind address.
+ * @returns the interface addresses to trust; empty for a concrete bind.
+ */
+function wildcardBindAuthorities(bindHost: string | undefined): string[] {
+  if (bindHost !== '0.0.0.0' && bindHost !== '::' && bindHost !== '::ffff:0.0.0.0') return []
+  return Object.values(networkInterfaces()).flat()
+    .flatMap(iface => iface !== undefined && iface.family === 'IPv4' && !iface.internal ? [iface.address] : [])
+}
+
 /** Host Connection service whose channel registrations belong to the caller fiber. */
 export class HostConnectionService extends Service implements HostConnectionHandle {
   /** The operator Peer every admitted request speaks for. */
@@ -106,7 +120,8 @@ export class HostConnectionService extends Service implements HostConnectionHand
   /** Apply the Host/Origin fence, then browser authentication. */
   requestRejection(request: ConnectionTrustRequest): ConnectionRequestRejection {
     const carrier = this.ctx.get('webServer')
-    if (!isTrustedApiRequest(request, this.trustedHosts, carrier?.host, carrier?.protocol ?? 'http:')) return 403
+    const trusted = [...this.trustedHosts, ...wildcardBindAuthorities(carrier?.host)]
+    if (!isTrustedApiRequest(request, trusted, carrier?.host, carrier?.protocol ?? 'http:')) return 403
     return this.browserAuth.isAuthenticated(request, carrier?.protocol === 'https:') ? undefined : 401
   }
 

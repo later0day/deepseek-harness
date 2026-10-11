@@ -22,7 +22,7 @@ import z from '@deepseek-ai/schemastery'
 import { addHarnessSourceSection, auditStartupEntries } from '@deepseek-ai/dsh-app-boot'
 import type {} from '@deepseek-ai/dsh-client-connection'
 import * as FrontendStatic from '@deepseek-ai/dsh-host-frontend-static'
-import { isLoopbackHost, normalizeBindAddress } from '@deepseek-ai/dsh-host-webserver'
+import { isLoopbackHost, isWildcardHost, normalizeBindAddress } from '@deepseek-ai/dsh-host-webserver'
 import { launchedThroughSsh, launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import { scrubbedParentEnv } from '@deepseek-ai/dsh-subprocess'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
@@ -135,6 +135,8 @@ function advertisedBindHost(host: string): string {
   const zoneAt = host.indexOf('%')
   const bare = zoneAt === -1 ? host : host.slice(0, zoneAt)
   if (isLoopbackHost(bare)) return normalizeBindAddress(bare)
+  // DSH fork: a wildcard bind is reachable on loopback, where host settings stay writable.
+  if (isWildcardHost(bare)) return '127.0.0.1'
   if (zoneAt === -1) return host
   throw new Error(
     `web-app: bind address ${JSON.stringify(host)} carries an interface zone id, which no URL can express;`

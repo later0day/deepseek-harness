@@ -258,6 +258,8 @@ describe('web-app runtime glue', () => {
     // `::127.0.0.1` names the IPv6 address `::7f00:1`, so the tail spelling an
     // IPv4 loopback address makes it no loopback bind.
     { bind: '::127.0.0.1', printed: '[::7f00:1]' },
+    // DSH fork: a wildcard bind advertises loopback, where host settings stay writable.
+    { bind: '0.0.0.0', printed: '127.0.0.1' },
   ])('warns and advertises the $bind bind address when the listener is not loopback', async ({ bind, printed }) => {
     stageDist()
     const ctx = new Context()

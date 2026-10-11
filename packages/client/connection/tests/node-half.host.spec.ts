@@ -1,6 +1,7 @@
 /** Node half: registers the /api prefix route bridging to the api gateway. */
 import { EventEmitter } from 'node:events'
 import { createServer, request as httpRequest } from 'node:http'
+import { networkInterfaces } from 'node:os'
 import { Readable } from 'node:stream'
 import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it } from 'vitest'
@@ -215,6 +216,31 @@ describe('connection node half', () => {
         await expect.poll(() => routes.find(route => route.path === API_PATH)).toBeDefined()
         const bound = browserCookie(connection, '10.1.2.3:3080')
         expect(connection.requestRejection(fakeRequest({ host: '10.1.2.3:3080', cookie: bound }))).toBeUndefined()
+      } finally {
+        await web.dispose()
+      }
+    } finally {
+      await fiber.dispose()
+    }
+  })
+
+  it('trusts this machine\'s own interface addresses under a wildcard bind (DSH fork)', async () => {
+    const own = Object.values(networkInterfaces()).flat()
+      .find(iface => iface !== undefined && iface.family === 'IPv4' && !iface.internal)?.address
+    const ctx = new Context()
+    provideBrowserCredentials(ctx)
+    const fiber = ctx.plugin({ inject: [...inject], apply }, { trustedHosts: [] })
+    try {
+      await fiber.await()
+      const connection = ctx.get('connection') as HostConnectionHandle
+      const web = ctx.plugin((webCtx) => {
+        webCtx.provide('webServer', fakeHttpServer([], [], '0.0.0.0') as WebServer)
+      })
+      try {
+        await web.await()
+        // Past the fence, an unauthenticated request meets browser authentication.
+        if (own !== undefined) expect(connection.requestRejection(fakeRequest({ host: `${own}:3080` }))).toBe(401)
+        expect(connection.requestRejection(fakeRequest({ host: '192.0.2.77:3080' }))).toBe(403)
       } finally {
         await web.dispose()
       }
