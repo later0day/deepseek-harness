@@ -195,7 +195,7 @@ interface SubagentMemberNames {
 
 ## 消息与中断
 
-`sendMessage` 要求确切在线发送方和同一根树中的目标 Session id。根和可继续成员可跨分支发消息；接纳时重新校验发送方和根。运行中目标接收 Steer；只冷恢复不在线的目标，其创建祖先可以保持离线。外部执行拒绝后续输入。本地和外部执行仅向仍在线的直接创建者报告最终文本、结构化输出、诊断和状态；caller 投递抑制这些通知。`drainDescendants` 等待整棵树释放；activation 回执的 `dispose()` 仅释放那一次执行。
+`sendMessage` 要求确切在线发送方和同一根树中的目标 Session id。根和可继续成员可跨分支发消息；接纳时重新校验发送方和根。运行中目标接收 Steer；只冷恢复不在线的目标，其创建祖先可以保持离线。外部执行拒绝后续输入。本地和外部执行仅向仍在线的直接创建者报告最终文本、结构化输出、诊断和状态；caller 投递抑制这些通知。`registerDeliveryGuard` 在冷恢复和最终准入前拦截所有投递，包括结算通知；`deliverHostPrompt` 在确切在线、同树的发送方权限下保留宿主消息来源和 Queue/Steer 选择。`registerContinuableSetup` 在新建与恢复子级的 setup 内同步执行，为驻留的本地子级补装，并随 effect 作用域清理。`drainChildren` 只停止指定后代身份及其子孙；`drainDescendants` 等待整棵树释放；activation 回执的 `dispose()` 仅释放那一次执行。
 
 ```ts type-equiv
 /** Durable attribution for one model-authored message between Agents. */
@@ -508,6 +508,45 @@ async resolveName(caller: Agent, name: string, signal: AbortSignal): Promise<Ses
 async waitForTreeWork(root: Agent): Promise<boolean>
 
 /**
+ * Register policy for every delivery to an existing subagent, including browser prompts
+ * and internal settlement notices. A rejection prevents cold restoration or inbox
+ * admission. Callers own the returned disposer through their plugin's effect scope.
+ * @param guard - validates the tree root and target Session without restoring it.
+ * @returns registration disposer.
+ */
+registerDeliveryGuard(guard: (root: Agent, targetId: SessionId) => void | Promise<void>): () => void
+
+/**
+ * Install per-child state during the factory setup, before the first accepted input.
+ * Existing resident continuable children are installed synchronously on registration.
+ * Each returned child cleanup runs on child disposal or registration removal.
+ * @param setup - synchronous fresh/cold-resume setup for a local child.
+ * @returns registration disposer.
+ */
+registerContinuableSetup(setup: (childCtx: Context, child: Agent) => void | (() => void)): () => void
+
+/**
+ * Deliver Host-authored content using the original message source and requested
+ * inbox destination. Only the exact live parent of a managed tree can send to
+ * that tree; cancellation governs work until inbox acceptance.
+ * @param parent - exact live ancestor or tree root initiating delivery.
+ * @param childId - recipient's durable Session id.
+ * @param content - model-visible prompt content.
+ * @param options - source, cancellation, and queue or steer destination.
+ * @returns accepted message id.
+ */
+deliverHostPrompt( parent: Agent, childId: SessionId, content: ContentBlock[], options: { readonly source: MessageSource; readonly signal: AbortSignal; readonly delivery: SubagentDelivery }, ): Promise<MessageId>
+
+/**
+ * Stop only the selected managed children and their descendants. Work admitted
+ * before the cutoff settles before return; unrelated siblings remain live.
+ * @param parent - exact live ancestor authorized to stop its descendants.
+ * @param ids - child Session ids selected for closure.
+ * @returns after targeted cleanup and pending starts settle.
+ */
+async drainChildren(parent: Agent, ids: readonly SessionId[]): Promise<void>
+
+/**
  * Steer one model-authored message to another member of the same subagent tree.
  * A running target receives it at its next step; an idle target starts a turn.
  * A cold target resumes under its runtime subagent tree root without restoring
@@ -617,7 +656,7 @@ registerProvider(provider: SubagentProvider): () => void
 getProvider(name: string): SubagentProvider | undefined
 ```
 
-Types: [Agent](core.zh.md) · [ContentBlock](llm-streaming.zh.md) · [MessageId](llm-streaming.zh.md) · [SessionId](core.zh.md)
+Types: [Agent](core.zh.md) · [ContentBlock](llm-streaming.zh.md) · [MessageId](llm-streaming.zh.md) · [MessageSource](llm-streaming.zh.md) · [SessionId](core.zh.md)
 
 Source: [`packages/subagent/subagent/src/index.ts`](../../packages/subagent/subagent/src/index.ts)
 

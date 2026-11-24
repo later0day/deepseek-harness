@@ -3668,6 +3668,131 @@ describe('continuable public API', () => {
   })
 })
 
+describe('continuable Host extension', () => {
+  it('preserves Host-authored source and queue versus steer destinations', async () => {
+    const { ctx, parent, adapter } = await setup(['hang'])
+    const target = await ctx.subagents.startActivation({ ...startSpec(parent), delivery: 'caller' })
+    const child = ctx.agents.get(target.childId)!
+    await vi.waitFor(() => { expect(adapter.requests).toHaveLength(1) })
+    const source = { kind: 'user' as const }
+    const queued = await ctx.subagents.deliverHostPrompt(parent, target.childId, message('later'), {
+      source, signal: testSignal, delivery: 'queue',
+    })
+    const steered = await ctx.subagents.deliverHostPrompt(parent, target.childId, message('now'), {
+      source, signal: testSignal, delivery: 'steer',
+    })
+    expect(child.inbox.nextTurn).toEqual(expect.arrayContaining([expect.objectContaining({ id: queued, source })]))
+    expect(child.inbox.nextStep).toEqual(expect.arrayContaining([expect.objectContaining({ id: steered, source })]))
+    await target.dispose()
+  })
+
+  it('denies every public delivery before restoring a retired child and unwinds on disposal', async () => {
+    const { ctx, parent } = await setup([textResponse('first')])
+    const target = await ctx.subagents.startActivation({ ...startSpec(parent), delivery: 'caller' })
+    await target.result
+    await target.dispose()
+    const checked: SessionId[] = []
+    const plugin = await ctx.plugin({ inject: ['subagents'], apply(pluginCtx: Context) {
+      pluginCtx.subagents.registerDeliveryGuard((_root, id) => {
+        checked.push(id)
+        if (id === target.childId) throw new SubagentError('retired', 'NOT_RESUMABLE')
+      })
+    } })
+    const options = { signal: testSignal, source: { kind: 'user' as const }, delivery: 'queue' as const }
+    await expect(ctx.subagents.sendMessage(parent, target.childId, message('agent'), { signal: testSignal }))
+      .rejects.toMatchObject({ code: 'NOT_RESUMABLE' })
+    await expect(ctx.subagents.deliverHostPrompt(parent, target.childId, message('host'), options))
+      .rejects.toMatchObject({ code: 'NOT_RESUMABLE' })
+    await expect(humanPrompt(ctx, target.childId, 'browser', 'queue'))
+      .rejects.toMatchObject({ code: 'subagent/not-resumable' })
+    expect(checked).toEqual([target.childId, target.childId, target.childId])
+    expect(ctx.agents.get(target.childId)).toBeUndefined()
+    await plugin.dispose()
+    await expect(ctx.subagents.deliverHostPrompt(parent, target.childId, message('accepted'), options))
+      .resolves.toBeTypeOf('string')
+  })
+
+  it('runs synchronous child setup before fresh and resumed first requests and cleans up on HMR', async () => {
+    const { ctx, parent } = await setup([textResponse('fresh'), textResponse('resumed')])
+    const visited: SessionId[] = []
+    const disposed: SessionId[] = []
+    const plugin = await ctx.plugin({ inject: ['subagents'], apply(pluginCtx: Context) {
+      pluginCtx.subagents.registerContinuableSetup((_childCtx, child) => {
+        visited.push(child.id)
+        return () => { disposed.push(child.id) }
+      })
+    } })
+    const target = await ctx.subagents.startActivation({ ...startSpec(parent), delivery: 'caller' })
+    await target.result
+    await target.dispose()
+    await ctx.subagents.deliverHostPrompt(parent, target.childId, message('resume'), {
+      source: { kind: 'user' }, signal: testSignal, delivery: 'queue',
+    })
+    expect(visited).toEqual([target.childId, target.childId])
+    await plugin.dispose()
+    expect(disposed).toEqual([target.childId, target.childId])
+  })
+
+  it('drains only selected descendants and refuses a sibling tree', async () => {
+    const { ctx, parent } = await setup(['hang', 'hang'])
+    const siblingParent = await ctx.agentLoop.create(brandString<SessionId>('other-root'), { provider: 'mock', model: 'mock' })
+    const target = await ctx.subagents.startActivation({ ...startSpec(parent), delivery: 'caller' })
+    const sibling = await ctx.subagents.startActivation({ ...startSpec(parent), delivery: 'caller' })
+    await expect(ctx.subagents.drainChildren(siblingParent, [target.childId]))
+      .rejects.toMatchObject({ code: 'UNAUTHORIZED' })
+    await ctx.subagents.drainChildren(parent, [target.childId])
+    expect(ctx.agents.get(target.childId)).toBeUndefined()
+    expect(ctx.agents.get(sibling.childId)).toBeDefined()
+    await sibling.dispose()
+  })
+  it('does not inject a settlement notice into a guarded live parent', async () => {
+    const { ctx, parent } = await setup(['hang', textResponse('done')])
+    const target = await ctx.subagents.startActivation({ ...startSpec(parent), delivery: 'caller' })
+    const member = ctx.agents.get(target.childId)!
+    const grandchild = await ctx.subagents.startActivation({ ...startSpec(member), delivery: 'parent' })
+    const blocked = vi.fn((_root: Agent, id: SessionId) => {
+      if (id === member.id) throw new SubagentError('retired', 'NOT_RESUMABLE')
+    })
+    const dispose = ctx.subagents.registerDeliveryGuard(blocked)
+    await grandchild.result
+    expect(blocked).toHaveBeenCalledWith(parent, member.id)
+    expect(member.inbox.nextTurn.some(item => item.source.kind === 'subagent-settled')).toBe(false)
+    expect(member.inbox.nextStep.some(item => item.source.kind === 'subagent-settled')).toBe(false)
+    dispose()
+    await target.dispose()
+  })
+
+  it('drains an admitted reserved-id startup without touching siblings', async () => {
+    const { ctx, parent } = await setup(['hang'])
+    const sibling = await ctx.subagents.startActivation({ ...startSpec(parent), delivery: 'caller' })
+    const reservedId = brandString<SessionId>('pending-member')
+    const agents = managerState(ctx).ownerCtx.agents
+    const create = agents.create.bind(agents)
+    const published = Promise.withResolvers<undefined>()
+    const release = Promise.withResolvers<undefined>()
+    const spy = vi.spyOn(agents, 'create').mockImplementation(async (options) => {
+      const handle = await create(options)
+      published.resolve(undefined)
+      await release.promise
+      return handle
+    })
+    try {
+      const starting = ctx.subagents.startActivation({ ...startSpec(parent), childId: reservedId, delivery: 'caller' })
+      await published.promise
+      const drained = ctx.subagents.drainChildren(parent, [reservedId])
+      release.resolve(undefined)
+      await expect(starting).rejects.toThrow()
+      await drained
+      expect(ctx.agents.get(reservedId)).toBeUndefined()
+      expect(ctx.agents.get(sibling.childId)).toBeDefined()
+    } finally {
+      release.resolve(undefined)
+      spy.mockRestore()
+      await sibling.dispose()
+    }
+  })
+})
+
 describe('continuable errors', () => {
   it('rejects nested creation until the child has a managed Activation', async () => {
     const { ctx, parent } = await setup([textResponse('child done')])

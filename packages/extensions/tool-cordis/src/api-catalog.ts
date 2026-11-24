@@ -4018,6 +4018,30 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'whether work was joined; hosts recheck root idle after true.',
       },
       {
+        signature: 'registerDeliveryGuard(guard: (root: Agent, targetId: SessionId) => void | Promise<void>): () => void',
+        description: 'Register policy for every delivery to an existing subagent, including browser prompts and internal settlement notices. A rejection prevents cold restoration or inbox admission. Callers own the returned disposer through their plugin\'s effect scope.',
+        parameters: [{ name: 'guard', description: 'validates the tree root and target Session without restoring it.' }],
+        returns: 'registration disposer.',
+      },
+      {
+        signature: 'registerContinuableSetup(setup: (childCtx: Context, child: Agent) => void | (() => void)): () => void',
+        description: 'Install per-child state during the factory setup, before the first accepted input. Existing resident continuable children are installed synchronously on registration. Each returned child cleanup runs on child disposal or registration removal.',
+        parameters: [{ name: 'setup', description: 'synchronous fresh/cold-resume setup for a local child.' }],
+        returns: 'registration disposer.',
+      },
+      {
+        signature: 'deliverHostPrompt( parent: Agent, childId: SessionId, content: ContentBlock[], options: { readonly source: MessageSource; readonly signal: AbortSignal; readonly delivery: SubagentDelivery }, ): Promise<MessageId>',
+        description: 'Deliver Host-authored content using the original message source and requested inbox destination. Only the exact live parent of a managed tree can send to that tree; cancellation governs work until inbox acceptance.',
+        parameters: [{ name: 'parent', description: 'exact live ancestor or tree root initiating delivery.' }, { name: 'childId', description: 'recipient\'s durable Session id.' }, { name: 'content', description: 'model-visible prompt content.' }, { name: 'options', description: 'source, cancellation, and queue or steer destination.' }],
+        returns: 'accepted message id.',
+      },
+      {
+        signature: 'async drainChildren(parent: Agent, ids: readonly SessionId[]): Promise<void>',
+        description: 'Stop only the selected managed children and their descendants. Work admitted before the cutoff settles before return; unrelated siblings remain live.',
+        parameters: [{ name: 'parent', description: 'exact live ancestor authorized to stop its descendants.' }, { name: 'ids', description: 'child Session ids selected for closure.' }],
+        returns: 'after targeted cleanup and pending starts settle.',
+      },
+      {
         signature: 'async sendMessage( sender: Agent, targetId: SessionId, content: ContentBlock[], options: SubagentSendMessageOptions, ): Promise<MessageId>',
         description: 'Steer one model-authored message to another member of the same subagent tree. A running target receives it at its next step; an idle target starts a turn. A cold target resumes under its runtime subagent tree root without restoring its creation ancestors. Sender identity is rechecked before inbox acceptance; cancellation stops only pre-acceptance work and never retracts an accepted message.',
         parameters: [{ name: 'sender', description: 'exact live root or resident continuable Agent originating the message.' }, { name: 'targetId', description: 'another root or continuable member\'s durable Session id.' }, { name: 'content', description: 'model-authored content to deliver.' }, { name: 'options', description: 'caller cancellation before inbox acceptance.' }],
@@ -7931,6 +7955,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface MessageRoleMap {\n    system: SystemMessage;\n    developer: DeveloperMessage;\n    user: UserMessage;\n    assistant: AssistantMessage;\n    tool: ToolResultMessage;\n}',
   },
   {
+    name: 'MessageSource',
+    declaration: 'export type MessageSource = MessageSourceMap[keyof MessageSourceMap];',
+  },
+  {
     name: 'MessageSourceMap',
     declaration: 'export interface MessageSourceMap {\n    user: {\n        kind: \'user\';\n    };\n    model: ModelMessageSource;\n    tool: ToolMessageSource;\n    \'system-prompt\': SystemPromptMessageSource;\n}',
   },
@@ -9984,7 +10012,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SubagentRuntime',
-    declaration: 'export class SubagentRuntime extends TypertRemoteService {\n    static Config;\n    static inject;\n    constructor(ctx: Context, private config: Config);\n    resolveMaxDepth(configured?: number | \'provider-managed\'): number | undefined;\n    startActivation(spec: SubagentActivationSpec & {\n        readonly childId: SessionId;\n    }): Promise<SubagentActivation & {\n        readonly messageId: MessageId;\n    }>;\n    startActivation(spec: SubagentActivationSpec): Promise<SubagentActivation>;\n    rootOf(caller: Agent): Agent;\n    namesOf(agent: Agent): SubagentMemberNames;\n    async resolveName(caller: Agent, name: string, signal: AbortSignal): Promise<SessionId>;\n    async waitForTreeWork(root: Agent): Promise<boolean>;\n    async sendMessage(sender: Agent, targetId: SessionId, content: ContentBlock[], options: SubagentSendMessageOptions): Promise<MessageId>;\n    interrupt(targetSessionId: SessionId, authority: SubagentInterruptAuthority): void;\n    async drainDescendants(parents: readonly Agent[]): Promise<void>;\n    listDescendants(rootSessionId: SessionId, signal?: AbortSignal): Promise<SubagentDescendantListEntry[]>;\n    @Remote({ name: \'prompt\', resources: { session: request => request.childSessionId } })\n    async prompt(request: SubagentPromptRequest, signal: AbortSignal): Promise<SubagentPromptReceipt>;\n    @Remote({ name: \'interruptByUser\', resources: { session: childSessionId => childSessionId } })\n    interruptByUser(childSessionId: SessionId): SubagentInterruptReceipt;\n  /* …truncated — full shape in source */',
+    declaration: 'export class SubagentRuntime extends TypertRemoteService {\n    static Config;\n    static inject;\n    constructor(ctx: Context, private config: Config);\n    resolveMaxDepth(configured?: number | \'provider-managed\'): number | undefined;\n    startActivation(spec: SubagentActivationSpec & {\n        readonly childId: SessionId;\n    }): Promise<SubagentActivation & {\n        readonly messageId: MessageId;\n    }>;\n    startActivation(spec: SubagentActivationSpec): Promise<SubagentActivation>;\n    rootOf(caller: Agent): Agent;\n    namesOf(agent: Agent): SubagentMemberNames;\n    async resolveName(caller: Agent, name: string, signal: AbortSignal): Promise<SessionId>;\n    async waitForTreeWork(root: Agent): Promise<boolean>;\n    registerDeliveryGuard(guard: (root: Agent, targetId: SessionId) => void | Promise<void>): () => void;\n    registerContinuableSetup(setup: (childCtx: Context, child: Agent) => void | (() => void)): () => void;\n    deliverHostPrompt(parent: Agent, childId: SessionId, content: ContentBlock[], options: {\n        readonly source: MessageSource;\n        readonly signal: AbortSignal;\n        readonly delivery: SubagentDelivery;\n    }): Promise<MessageId>;\n    async drainChildren(parent: Agent, ids: readonly SessionId[]): Promise<void>;\n    async sendMessage(sender: Agent, targetId: SessionId, content: ContentBlock[], options: SubagentSendMessageOptions): Promise<MessageId>;\n    interrupt(targetSessionId: SessionId, authority: SubagentInterruptAuthority): void;\n    asyn /* …truncated — full shape in source */',
   },
   {
     name: 'SubagentSendMessageOptions',

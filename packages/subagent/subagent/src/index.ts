@@ -37,7 +37,7 @@ import { brandString } from '@deepseek-ai/dsh-brand'
 import { scopeTarget } from '@deepseek-ai/dsh-scope'
 import type { Scoped } from '@deepseek-ai/dsh-scope'
 import { assertObjectJsonSchema } from '@deepseek-ai/dsh-tools'
-import type { ContentBlock, MessageId } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, MessageId, MessageSource } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { canonicalClientTimeZone } from '@deepseek-ai/dsh-util-time'
@@ -50,6 +50,7 @@ import type {
   SubagentPromptReceipt,
   SubagentPromptRequest,
   SubagentPromptRequestId,
+  SubagentDelivery,
 } from './control-types.ts'
 import type {
   SubagentCapabilities,
@@ -198,6 +199,8 @@ export class SubagentRuntime extends TypertRemoteService {
   })
   static inject = ['workingDirectory', 'sessionProjections']
   private providers = new Map<string, SubagentProvider>()
+  private readonly deliveryGuards = new Set<(root: Agent, targetId: SessionId) => void | Promise<void>>()
+  private readonly continuableSetups = new Set<(childCtx: Context, child: Agent) => void>()
   private manager: SubagentManager | undefined
   /**
    * The contained lifecycle-edge publisher. Built here because scoped dispatch
@@ -222,6 +225,15 @@ export class SubagentRuntime extends TypertRemoteService {
         identityOf: session => identityProjection.stateOf(session).identity,
         catalogOf: session => subagentCatalogProjectionDefinition.wire.view(catalogProjection.stateOf(session)),
         emitLifecycle: this.emitLifecycle,
+        checkDelivery: (root, targetId) => {
+          if (this.deliveryGuards.size === 0) return
+          return (async () => {
+            for (const guard of [...this.deliveryGuards]) await guard(root, targetId)
+          })()
+        },
+        setupContinuable: (childCtx, child) => {
+          for (const setup of [...this.continuableSetups]) setup(childCtx, child)
+        },
       }, () => this.config.maxActiveSubagents.get())
       this.manager = manager
       childCtx.effect(() => () => {
@@ -350,6 +362,100 @@ export class SubagentRuntime extends TypertRemoteService {
    */
   async waitForTreeWork(root: Agent): Promise<boolean> {
     return this.manager?.waitForTreeWork(root) ?? false
+  }
+
+  /**
+   * Register policy for every delivery to an existing subagent, including browser prompts
+   * and internal settlement notices. A rejection prevents cold restoration or inbox
+   * admission. Callers own the returned disposer through their plugin's effect scope.
+   * @param guard - validates the tree root and target Session without restoring it.
+   * @returns registration disposer.
+   */
+  registerDeliveryGuard(guard: (root: Agent, targetId: SessionId) => void | Promise<void>): () => void {
+    // oxlint-disable-next-line typescript/no-misused-promises -- effect returns a synchronous registration disposer.
+    return this.ctx.effect(() => {
+      this.deliveryGuards.add(guard)
+      return () => { this.deliveryGuards.delete(guard) }
+    }, 'subagents.registerDeliveryGuard()')
+  }
+
+  /**
+   * Install per-child state during the factory setup, before the first accepted input.
+   * Existing resident continuable children are installed synchronously on registration.
+   * Each returned child cleanup runs on child disposal or registration removal.
+   * @param setup - synchronous fresh/cold-resume setup for a local child.
+   * @returns registration disposer.
+   */
+  registerContinuableSetup(setup: (childCtx: Context, child: Agent) => void | (() => void)): () => void {
+    // oxlint-disable-next-line typescript/no-misused-promises -- effect returns a synchronous registration disposer.
+    return this.ctx.effect(() => {
+      const installed = new Set<() => void>()
+      const attach = (childCtx: Context, child: Agent): void => {
+        // Legacy consumers read the Agent as a property of the scoped child
+        // Context instead of the second parameter; provide both faces.
+        const legacyCtx = Object.create(childCtx, {
+          agent: { value: child, enumerable: true },
+        }) as Context & { agent: Agent }
+        const cleanup = setup(legacyCtx, child)
+        if (cleanup === undefined) return
+        let active = true
+        const dispose = (): void => {
+          if (!active) return
+          active = false
+          installed.delete(dispose)
+          cleanup()
+        }
+        installed.add(dispose)
+        try {
+          childCtx.effect(() => dispose, 'subagents.continuableSetup()')
+        } catch (error: unknown) {
+          dispose()
+          throw error
+        }
+      }
+      this.continuableSetups.add(attach)
+      try {
+        this.manager?.forEachResidentLocal((child) => { attach(child.ctx, child) })
+      } catch (error: unknown) {
+        this.continuableSetups.delete(attach)
+        for (const dispose of [...installed]) dispose()
+        throw error
+      }
+      return () => {
+        this.continuableSetups.delete(attach)
+        for (const dispose of [...installed]) dispose()
+      }
+    }, 'subagents.registerContinuableSetup()')
+  }
+
+  /**
+   * Deliver Host-authored content using the original message source and requested
+   * inbox destination. Only the exact live parent of a managed tree can send to
+   * that tree; cancellation governs work until inbox acceptance.
+   * @param parent - exact live ancestor or tree root initiating delivery.
+   * @param childId - recipient's durable Session id.
+   * @param content - model-visible prompt content.
+   * @param options - source, cancellation, and queue or steer destination.
+   * @returns accepted message id.
+   */
+  deliverHostPrompt(
+    parent: Agent, childId: SessionId, content: ContentBlock[],
+    options: { readonly source: MessageSource; readonly signal: AbortSignal; readonly delivery: SubagentDelivery },
+  ): Promise<MessageId> {
+    return this.requireManager().deliverHostPrompt(parent, childId, content, options)
+  }
+
+  /**
+   * Stop only the selected managed children and their descendants. Work admitted
+   * before the cutoff settles before return; unrelated siblings remain live.
+   * @param parent - exact live ancestor authorized to stop its descendants.
+   * @param ids - child Session ids selected for closure.
+   * @returns after targeted cleanup and pending starts settle.
+   */
+  async drainChildren(parent: Agent, ids: readonly SessionId[]): Promise<void> {
+    const manager = this.manager
+    if (manager === undefined) return
+    await manager.drainChildren(parent, ids)
   }
 
   /**

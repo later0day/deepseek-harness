@@ -77,6 +77,9 @@ kind: "package-reference"
 
 `sendMessage()` 允许在线根和驻留的可继续子代理，按 Session id 联系同一棵树中的任意其他根或可继续成员。目标在下一步接收 Steer 输入，或在空闲时开始轮次。仅在 subagent 树根下恢复冷目标，其创建祖先保持离线；消息保留实际发送者。`rootOf()` 解析调用方的在线根。Agent 中断要求祖先权限。浏览器提示词和用户中断仅按子 Session 寻址；Gateway 在任何副作用之前检查该 Session 上对应操作的权限。父级或 global 授权不意味着子级访问权。提示词要求 subagent 树根在线；创建者可以离线。用户中断不恢复目标，目标缺席时接受为无操作。提示词选择 Queue 或 Steer，经附件存储接受图片批次；不兼容的目标模型拒绝图片。`listDescendants()` 通过父级拥有的 `subagentCatalog` 投影递归发现成员。它保留目录顺序，每个可达 Session 读取一次，跳过外部叶子，并报告不可读分支而不激活 Agent。
 
+`registerDeliveryGuard()` 通过 effect 作用域注册适用于所有可继续投递的策略，覆盖 Agent 消息、宿主提示、浏览器提示和内部结算通知；它可以在冷恢复前拒绝目标，并在最终收件箱准入前复查。`deliverHostPrompt(parent, childId, content, { source, signal, delivery })` 保留调用方的消息来源，将 Queue 投递到后续轮次、Steer 投递到下一步；发送方必须是同一棵树中确切在线的 Agent。`registerContinuableSetup()` 在全新创建或冷恢复的首次输入之前同步安装子级状态，注册时还会补装驻留子级；返回的清理函数在子级释放或注销时执行。`drainChildren(parent, ids)` 仅停止指定后代身份及其子孙，包括已准入但仍在启动的子级，不影响无关同级，也不删除持久化的 Session 历史。
+
+
 ### 失败与恢复
 
 每个 `SubagentError` 都携带 [`src/error.ts`](src/error.ts) 中封闭联合类型 `SubagentErrorCode` 的一个 code，该文件逐条说明各条件。缺少 `agents` 服务时，启动请求以 `CONTINUATION_UNAVAILABLE` 拒绝；运行时可用但父级缺失或被替换时，以 `UNAUTHORIZED` 拒绝。未实现任何执行方法的提供方会在注册时以 `UNSUPPORTED_CAPABILITY` 被拒绝；请求不受支持的能力会以同一码使创建失败。如果等待目录解析期间提供方被移除或替换，创建会在调用任何一方之前以 `PROVIDER_CHANGED` 拒绝；调用方可根据当前注册重试委派。以下创建失败均为 `SubagentError`：超出请求深度的子代以 `SubagentDepthError` 子类和 `DEPTH_EXCEEDED` 拒绝，无效的运行时 `subagentDepth` 以 `INVALID_DEPTH` 拒绝，选择了 preset 但缺少 preset 服务时以 `PRESET_UNAVAILABLE` 拒绝（所选 preset 未知或无法加载时保留 registry 的 `RemoteError` code），缺少工作目录服务的本地子代以 `WORKING_DIRECTORY_UNAVAILABLE` 拒绝，cwd 为相对路径或不可进入的进程外子代以 `INVALID_CWD` 拒绝。持久化 descriptor 损坏的冷目标以 `NOT_RESUMABLE` 拒绝，有待处理输入时调用 `structured_output` 以 `STRUCTURED_OUTPUT_PENDING_INPUT` 失败。调用方信号仅取消尚未发布的工作；发布后通过 `dispose()` 取消该次 activation，并等待其资源清理完成。创建后代独立继续运行；宿主必须在释放根句柄前等待 `drainDescendants([root])`，以停止所有成员并等待正在启动的工作。`result` 在清理与通知结束后完成，携带输出、可选结构化数据与停止原因；结果捕获故障在清理后使其拒绝。清理失败使 `dispose()` 拒绝，并将生命周期结束事件标记为失败；结果 promise 与父级通知保留已捕获的执行结果。
